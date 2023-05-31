@@ -1,0 +1,187 @@
+---
+title: "figure_3_sup"
+author: "Vincent Fischer"
+date: "22 11 2022"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: spacelab
+    code_folding: hide
+    fig_width: 12
+    df_print: paged
+    number_sections: true
+    
+
+---
+<style type="text/css">
+.main-container {
+  max-width: 75% !important;
+  margin: auto;
+}
+</style>
+
+```{r}
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(rtracklayer)
+  library(GenomicRanges)
+  library(ggplot2)
+  library(ComplexHeatmap)
+  library(chromVAR)
+  library(motifmatchr)
+  library(memes)
+  library(MotifDb)
+  library(universalmotif)
+  library(TFBSTools)
+  library(AnnotationHub)
+  library(RColorBrewer)
+  library(viridis)
+  library(viridisLite)
+  library(cowplot)
+})
+theme_set(theme_bw())
+set.seed(123)
+```
+
+load files for Nuc.Free, Mono and Full of Veh
+```{r}
+bw_ATAC_mono <- list.files(path = "../Dex_Veh/tracks/", pattern ="*Veh.(.*)mono.bw",full.names = TRUE )
+bw_ATAC_nf <- list.files(path = "../Dex_Veh/tracks/", pattern ="*Veh.(.*)NF.bw",full.names = TRUE )
+bw_ATAC_full <- list.files(path = "../Dex_Veh/tracks/", pattern ="*Veh.(.*)full.bw",full.names = TRUE )
+
+
+names(bw_ATAC_mono) <- c("Mono_1","Mono_2")
+names(bw_ATAC_nf) <- c("NF_1","NF_2")
+names(bw_ATAC_full) <- c("Full_1","Full_2")
+
+
+```
+load files Full for all
+
+```{r}
+bw_ATAC <-list.files(path = "../Dex_Veh/tracks/", pattern ="*.full.bw$",full.names = TRUE )
+names(bw_ATAC)<- c("Dex 1","Dex 2","Dex 3","Veh 1","Veh 2" )
+```
+
+
+import peaks the same used for motif activity (Fig3A)
+```{r, fig.width=8.5, fig.height=4.8}
+bl <- import("../object_resources//mm10.blacklist_chrM.bed")
+seqlevelsStyle(bl) <- "ensembl"
+
+nfp <- import("../object_resources/merged_NF_peaks.bed")
+nfp <- nfp[!overlapsAny(nfp, bl)]
+nfp_centers <- resize(nfp[width(nfp)<250], 50, fix="center")
+```
+
+
+
+# A
+
+```{r}
+nf <- bwNormFactors(bw_ATAC)
+
+m1 <- signal2Matrix(filepaths = bw_ATAC,regions = nfp_centers,w = 10L)
+m1_bg <- rescaleSignalMatrices(ml = m1,scaleFactors = nf)
+```
+
+```{r}
+p1 <- plotEnrichedHeatmaps(c(m1_bg[4:5],m1_bg[1:3]), colors = rocket(100), row_title="NFA regions",scale_title = "backgr. \nnorm.\ndensity",raster_resize_mat = TRUE,use_raster = TRUE)
+p1
+```
+
+```{r}
+saveRDS(p1,"../object_resources/figure_4_sup_meta/p1.rds")
+#p1 <- readRDS("../object_resources/figure_4_sup_meta/p1.rds")
+```
+
+
+# B
+
+```{r}
+d <- meltSignals(m1_bg)
+d$condition <- gsub("[0-9]","",d$sample)
+```
+```{r}
+p2 <-ggplot(d, aes(position, mean, group=condition, color = condition, fill = condition)) +
+  geom_vline(xintercept=0, linetype="dashed") +
+  labs(x="center", y="mean background norm. density")+
+  stat_summary(geom="ribbon", alpha=0.3, colour= NA) + stat_summary(fun=mean, geom="line", size = 1.2)+
+  ggtitle("Average accessibility")+ scale_color_brewer(palette="Set1")+scale_fill_brewer(palette="Set1")+theme(text = element_text(size = 10))
+```
+
+
+```{r,eval=FALSE}
+p2 <- ggplot(d, aes(position, mean, group=sample, colour=condition)) +
+  geom_vline(xintercept=0, linetype="dashed") +
+  #geom_ribbon(aes(position, ymin=mean-SE, ymax=mean+SE, group=sample, fill=condition), alpha=0.4, colour=NA) + 
+  geom_line(size=1.2) + labs(x="Nucleosome-free peaks", y="mean RPKM") +scale_color_brewer(palette="Set1")+scale_fill_brewer(palette="Set1")+
+  theme(legend.position = "bottom")
+```
+```{r}
+saveRDS(p2,"../object_resources/figure_4_sup_meta/p2.rds")
+#p2 <- readRDS("../object_resources/figure_4_sup_meta/p2.rds")
+```
+
+# C
+load TSS with 5FC in proximity
+```{r}
+TSS_2KB_5fC <- readRDS("../object_resources/5fC/TSS_2KB_5fC.rds")
+```
+
+
+```{r}
+bg_nf <- bwNormFactors(c(bw_ATAC_nf,bw_ATAC_mono,bw_ATAC_full), method = "background")
+m_5fC <- signal2Matrix(c(bw_ATAC_nf,bw_ATAC_mono,bw_ATAC_full),w = 10L, regions = TSS_2KB_5fC)
+m_5fC_bg <- rescaleSignalMatrices(m_5fC,bg_nf)
+```
+
+```{r}
+set.seed(123)  # to ensure that it gives the same results everytime
+cl <- clusterSignalMatrices(m_5fC_bg, k=2)
+table(cl)
+```
+```{r,fig.width=12,eval=FALSE}
+mycolors <- c("1" =brewer.pal(n=9,"Set1")[1],"2"=brewer.pal(n=9,"Set1")[2],"3" =brewer.pal(n=9,"Set1")[3])
+plotEnrichedHeatmaps(m_5fC_bg[1:6],raster_resize_mat = TRUE, row_title="clustered TSS with 5fC (+-2KB)",scale_title = "backgr. \nnorm.\ndensity", axis_name = c("-2kb","TSS","+2kb"),colors = rocket(100),row_split = cl, mean_color = mycolors)
+```
+
+
+```{r,fig.width=15.3}
+names(m_5fC_bg)<- c("NF_1","NF_2","Mono_1","Mono_2","Full_1","Full_2")
+mycolors <- c("1" =brewer.pal(n=9,"Set1")[1],"2"=brewer.pal(n=9,"Set1")[2],"3" =brewer.pal(n=9,"Set1")[3])
+p3 <- plotEnrichedHeatmaps(m_5fC_bg[1:6],raster_resize_mat = TRUE, row_title="clustered TSS with 5fC (+-2KB)",scale_title = "backgr. \nnorm.\ndensity", axis_name = c("-2kb","TSS","+2kb"),colors = rocket(100),row_split = cl, mean_color = mycolors)
+print(p3)
+```
+
+```{r}
+saveRDS(p3,"../object_resources/figure_4_sup_meta/p3_2cl.rds")
+#p3 <- readRDS("../object_resources/figure_4_sup_meta/p3_2cl.rds")
+```
+
+
+
+```{r,eval =FALSE}
+#done with original cluster order, clusters with signal in the Nuc Free tracks
+cl_TSS_2KB_5fC <- TSS_2KB_5fC[cl == 1 ,]
+cl_TSS_2KB_5fC
+```
+
+# joint
+
+```{r,fig.height=9}
+pp <- plot_grid(plot_grid(grid.grabExpr(draw(p1)),p2,nrow = 1,ncol=2,labels=c("A","B"),rel_widths = c(2,1)),plot_grid(grid.grabExpr(draw(p3)),nrow = 1,ncol = 2,rel_widths=c(2,1),labels=c("C",NA)),nrow=2,ncol=1,rel_heights = c(2,3))
+pp
+
+saveRDS(pp,"../object_resources/figure_4_sup_meta/pp.rds")
+
+pdf("figure_4_sup_meta.pdf", width=10, height=7.5)
+pp
+dev.off()
+```
+
+```{r}
+sessionInfo()
+```
+
