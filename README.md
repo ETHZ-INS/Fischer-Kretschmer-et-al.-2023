@@ -1,4 +1,4 @@
-# Malleability-of-chromatin-2023
+# The-converging-role-of-5fC-and-stress-hormone-receptor-activity-in-sperm-in-impacting-offspring-phenotype-2023
 Code, objects and rendered rmarkdowns for ATAC-seq and RNA-seq data for Fischer et al. 2023. Code is deposited in GEO (GSE233892  and GSE234039)
 Empty folder structure are equivalent to structure in scripts.
 Tdg_wt and Dex_Veh should include processed sequencing data.
