@@ -1,4 +1,4 @@
-# The involvement of sperm chromatin accessibility in intergenerational effects of dexamethasone exposure 2023
+# Sperm chromatin accessibility's involvement in the intergenerational effects of stress hormone receptor activation 2023
 Code, objects and rendered rmarkdowns for ATAC-seq and RNA-seq data for Fischer et al. 2023. Code is deposited in GEO (GSE233892  and GSE234039)
 Empty folder structure are equivalent to structure in scripts.
 Tdg_wt and Dex_Veh should include processed sequencing data.
