@@ -1,0 +1,653 @@
+---
+title: "figure_2"
+author: "Vincent Fischer"
+date: "25 05 2023"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: spacelab
+    code_folding: hide
+    fig_width: 12
+    df_print: paged
+    number_sections: true
+    
+
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 75% !important;
+  margin: auto;
+}
+</style>
+# load libraries
+```{r}
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(rtracklayer)
+  library(GenomicRanges)
+  library(ComplexHeatmap)
+  library(chromVAR)
+  library(motifmatchr)
+  library(memes)
+  library(MotifDb)
+  library(universalmotif)
+  library(TFBSTools)
+  library(AnnotationHub)
+  library(RColorBrewer)
+  library(viridis)
+  library(viridisLite)
+  library(ggrepel)
+  library(limma)
+  library(cowplot)
+  library(edgeR)
+  library(SummarizedExperiment)
+  library(SEtools)
+  library(sechm)
+  library(edgeR)
+  library(ggplot2)
+  library(grid)
+  library(cowplot)
+  library(rGREAT)
+  library(topGO)
+  library(fgsea)
+  library(viper)
+  library(knitr)
+ })
+theme_set(theme_bw())
+set.seed(123)
+BiocParallel::register(BPPARAM = BiocParallel::MulticoreParam(6))
+```
+
+# A
+## load and prepare data
+load data
+tracks
+```{r}
+
+bigwig_full <- list.files("../Tdg_wt/tracks",pattern = ".bw$",full.names = TRUE)
+names(bigwig_full) <-c("TDG_KO1","TDG_KO2","TDG_KO3","Control1","Control2")
+```
+
+
+peaks
+```{r}
+setwd("../Tdg_wt/peaks/peaks")
+peaks_TDG_BP <- c(TDG_KO1_BP = rtracklayer::import("Kg_tdg_ko_1_EKDL220000948-1a_H22J7DSX3_L2_peaks.broadPeak"), TDG_KO2_BP = rtracklayer::import("Kg_tdg_ko_2_EKDL220003833-1a_HJ5T2DSX3_L1_peaks.broadPeak"),TDG_KO3_BP = rtracklayer::import("Kg_tdg_ko_3_EKDL220003834-1a_HJ5T2DSX3_L1_peaks.broadPeak"))
+peaks_Ctrl_BP <- c(Control_1 = rtracklayer::import("Kg_tdg_M_1_EKDL220003835-1a_HJ5T2DSX3_L1_peaks.broadPeak"), Control_2 = rtracklayer::import("Kg_tdg_M_3_EKDL220003836-1a_HJ5T2DSX3_L1_peaks.broadPeak"))
+
+
+```
+
+consensus peaks
+```{r}
+
+blacklist <- import("/reference/Mus_musculus/mm10.blacklist_chrM.bed")
+blacklist
+seqlevelsStyle(blacklist) <- "ensembl"
+
+
+```
+
+get consensus peaks and remove blacklist
+```{r}
+#total consensus peaks (more than in one sample)
+x <- c(peaks_Ctrl_BP,peaks_TDG_BP)
+total_consensus_peaks <- reduce(unlist(GRangesList(x)), with.revmap=TRUE)
+y <- keepStandardChromosomes(total_consensus_peaks, pruning.mode = "coarse")
+total_consensus_peaks <- granges(y[lengths(y$revmap)>1])
+blacklist <- import("/reference/Mus_musculus/mm10.blacklist_chrM.bed")
+seqlevelsStyle(blacklist) <- "ensembl"
+total_consensus_peaks <- total_consensus_peaks[!overlapsAny(total_consensus_peaks, blacklist)]# thats how you get rid of blacklisted peaks!!!!
+total_consensus_peaks
+
+# Tdg+/- consensus peaks (more than in one sample)
+x <- c(peaks_TDG_BP)
+TDG_consensus_peaks <- reduce(unlist(GRangesList(x)), with.revmap=TRUE)
+y <- keepStandardChromosomes(TDG_consensus_peaks, pruning.mode = "coarse")
+TDG_consensus_peaks <- granges(y[lengths(y$revmap)>1]) #for standard chromosomes use keep this line of code
+blacklist <- import("/reference/Mus_musculus/mm10.blacklist_chrM.bed")
+seqlevelsStyle(blacklist) <- "ensembl"
+TDG_consensus_peaks <- TDG_consensus_peaks[!overlapsAny(TDG_consensus_peaks, blacklist)]# thats how you get rid of blacklisted peaks!!!!
+TDG_consensus_peaks
+
+```
+
+signal plots with trimmed tdg consensus peaks
+```{r}
+TDG_consensus_peaks_2000 <- TDG_consensus_peaks[width(TDG_consensus_peaks)<=2000] 
+TDG_consensus_peaks_2000
+```
+
+generate normalization factors for matrices
+```{r}
+
+normfactors <- epiwraps::bwNormFactors(bigwig_full)
+```
+
+generate matrices TDG consensus peaks
+```{r}
+m_bp_TDG_2000 <- signal2Matrix(bigwig_full,regions = TDG_consensus_peaks_2000,w = 10L)
+
+m_bp_TDG_bg_2000 <- rescaleSignalMatrices(m_bp_TDG_2000,normfactors)
+
+# saveRDS(m_bp_TDG_bg_2000,"../object_resources/figure_5_meta/m_bp_TDG_bg_2000.rds") 
+m_bp_TDG_bg_2000 <- readRDS("../object_resources/figure_5_meta/m_bp_TDG_bg_2000.rds")
+```
+
+aggregate matrix
+```{r}
+sm1 <- list( wt =mergeSignalMatrices(m_bp_TDG_bg_2000[4:5],aggregation = "mean"), "Tdg +/-" =mergeSignalMatrices(m_bp_TDG_bg_2000[1:3],aggregation = "mean"))
+```
+
+generate cluster
+```{r}
+set.seed(123)  # to ensure that it gives the same results everytime
+cl <- clusterSignalMatrices(m_bp_TDG_bg_2000, k=5)
+```
+
+## generate A
+
+```{r, fig.width=10}
+mycolors <- c("1"=brewer.pal(n=9,"Set1")[1], "2"=brewer.pal(n=9,"Set1")[2],"3"=brewer.pal(n=9,"Set1")[3],"4"=brewer.pal(n=9,"Set1")[4],"5"=brewer.pal(n=9,"Set1")[5])
+p1 <- plotEnrichedHeatmaps(sm1,row_title=gt_render("*Tdg +/-* accessible regions") ,scale_title = "backgr.\nnorm.\ndensity", colors = rocket(100),row_split = cl,mean_color = mycolors, scale_rows = FALSE,,column_title_gp=gpar(fontface = "italic"), ) # row_title=gt_render("*Tdg +/-* accessible regions")
+print(p1)
+#p1_1 <- plotEnrichedHeatmaps(sm1[2],row_title_side= "right" ,scale_title = "backgr.\nnorm.\ndensity", colors = rocket(100),row_split = cl,mean_color = mycolors, scale_rows = FALSE,,column_title_gp=gpar(fontface = "italic"), ) # row_title=gt_render("*Tdg +/-* accessible regions")
+#print(p1_1)
+#p1+p1_1
+saveRDS(p1,"../object_resources/figure_5_meta//p1.rds")
+p1_3 <- readRDS("../object_resources/figure_5_meta//p1.rds")
+
+```
+
+# B
+
+## load and prepare data 
+
+Import of Data blacklist still included
+```{r }
+
+bigwigfiles_ctrl <- list.files("../Tdg_wt/tracks",pattern = "^Kg_tdg_M(.*)\\L.\\.bw$", full =TRUE)
+bigwigfiles_TDG <- list.files("../Tdg_wt/tracks",pattern = "^Kg_tdg_ko(.*)\\L.\\.bw$", full =TRUE)
+names(bigwigfiles_ctrl) <- c("Control_1", "Control_2")
+names(bigwigfiles_TDG) <- c("TDG_KO1", "TDG_KO2","TDG_KO3")
+
+setwd("../Tdg_wt/peaks/")
+peaks_TDG_NF <- c(TDG_KO1_NF = rtracklayer::import("NFpeaks/Kg_tdg_ko_1_EKDL220000948-1a_H22J7DSX3_L2_peaks.narrowPeak"), TDG_KO2_NF = rtracklayer::import("NFpeaks/Kg_tdg_ko_2_EKDL220003833-1a_HJ5T2DSX3_L1_peaks.narrowPeak"),TDG_KO3_NF = rtracklayer::import("NFpeaks/Kg_tdg_ko_3_EKDL220003834-1a_HJ5T2DSX3_L1_peaks.narrowPeak"))
+peaks_Ctrl_NF <- c(Control_1 = rtracklayer::import("NFpeaks/Kg_tdg_M_1_EKDL220003835-1a_HJ5T2DSX3_L1_peaks.narrowPeak"), Control_2 = rtracklayer::import("NFpeaks/Kg_tdg_M_3_EKDL220003836-1a_HJ5T2DSX3_L1_peaks.narrowPeak"))
+```
+blacklist
+```{r}
+blacklist <- import("/reference/Mus_musculus/mm10.blacklist_chrM.bed")
+blacklist
+seqlevelsStyle(blacklist) <- "ensembl"
+```
+
+
+```{r}
+#total consensus peaks (more than in one sample)
+x <- c(peaks_Ctrl_NF,peaks_TDG_NF)
+total_consensus_NFpeaks <- reduce(unlist(GRangesList(x)), with.revmap=TRUE)
+y <- keepStandardChromosomes(total_consensus_NFpeaks, pruning.mode = "coarse")
+total_consensus_NFpeaks <- granges(y[lengths(y$revmap)>1])
+blacklist <- import("/reference/Mus_musculus/mm10.blacklist_chrM.bed")
+seqlevelsStyle(blacklist) <- "ensembl"
+total_consensus_NFpeaks <- total_consensus_NFpeaks[!overlapsAny(total_consensus_NFpeaks, blacklist)]# thats how you get rid of blacklisted peaks!!!!
+total_consensus_NFpeaks
+
+# Tdg+/- consensus peaks (more than in one sample)
+x <- c(peaks_TDG_NF)
+TDG_consensus_NFpeaks <- reduce(unlist(GRangesList(x)), with.revmap=TRUE)
+y <- keepStandardChromosomes(TDG_consensus_NFpeaks, pruning.mode = "coarse")
+TDG_consensus_NFpeaks <- granges(y[lengths(y$revmap)>1]) #for standard chromosomes use keep this line of code
+blacklist <- import("/reference/Mus_musculus/mm10.blacklist_chrM.bed")
+seqlevelsStyle(blacklist) <- "ensembl"
+TDG_consensus_NFpeaks <- TDG_consensus_NFpeaks[!overlapsAny(TDG_consensus_NFpeaks, blacklist)]# thats how you get rid of blacklisted peaks!!!!
+TDG_consensus_NFpeaks
+```
+
+generate normalization factors
+```{r}
+normfactors <- epiwraps::bwNormFactors(c(bigwigfiles_ctrl,bigwigfiles_TDG),)
+```
+
+generate matrix for TDG consensus peaks
+```{r}
+m_NP_TDG <- signal2Matrix(c(bigwigfiles_ctrl,bigwigfiles_TDG),regions = TDG_consensus_NFpeaks,w = 10L)
+
+m_NP_TDG_bg <- rescaleSignalMatrices(m_NP_TDG,normfactors)
+saveRDS(m_NP_TDG_bg,"../object_resources/figure_5_meta/m_NP_TDG_bg.rds")
+```
+
+aggregate matrix
+```{r}
+#m_NP_TDG_bg <- readRDS("../object_resources/figure_5_meta/m_NP_TDG_bg.rds")
+sm2 <- list( wt =mergeSignalMatrices(m_NP_TDG_bg[1:2],aggregation = "mean"), "Tdg +/-" =mergeSignalMatrices(m_NP_TDG_bg[3:5],aggregation = "mean"))
+```
+
+
+## generate figure B
+
+```{r,fig.width=8}
+p2 <- plotEnrichedHeatmaps(sm2, row_title=gt_render("*Tdg +/-* NFA regions"),scale_title = "backgr.\nnorm.\ndensity", colors = rocket(100),column_title_gp=gpar(fontface = "italic"),use_raster = TRUE)
+print(p2)
+# saveRDS(p2,"../object_resources/figure_5_meta/p2.rds")
+# p2 <- readRDS("../object_resources/figure_5_meta/p2.rds")
+```
+
+
+# C
+## load and prepare data
+
+bamfiles
+```{r}
+bamfiles_ctrl <- list.files("../Tdg_wt/aligned",pattern = "^Kg_tdg_M(.*)\\.bam$", full =TRUE)
+bamfiles_TDG <- list.files("../Tdg_wt/aligned",pattern = "^Kg_tdg_ko(.*)\\.bam$", full =TRUE)
+
+names(bamfiles_ctrl) <- c("Control_1", "Control_2")
+names(bamfiles_TDG) <- c("TDG_KO1", "TDG_KO2","TDG_KO3")
+```
+
+NFpeaks
+Import of Data blacklist still included
+```{r, eval=FALSE }
+
+bigwigfiles_ctrl <- list.files("../Tdg_wt/tracks",pattern = "^Kg_tdg_M(.*)\\L.\\.bw$", full =TRUE)
+bigwigfiles_TDG <- list.files("../Tdg_wt/tracks",pattern = "^Kg_tdg_ko(.*)\\L.\\.bw$", full =TRUE)
+names(bigwigfiles_ctrl) <- c("Control_1", "Control_2")
+names(bigwigfiles_TDG) <- c("TDG_KO1", "TDG_KO2","TDG_KO3")
+
+setwd("../Tdg_wt/peaks/")
+peaks_TDG_NF <- c(TDG_KO1_NF = rtracklayer::import("NFpeaks/Kg_tdg_ko_1_EKDL220000948-1a_H22J7DSX3_L2_peaks.narrowPeak"), TDG_KO2_NF = rtracklayer::import("NFpeaks/Kg_tdg_ko_2_EKDL220003833-1a_HJ5T2DSX3_L1_peaks.narrowPeak"),TDG_KO3_NF = rtracklayer::import("NFpeaks/Kg_tdg_ko_3_EKDL220003834-1a_HJ5T2DSX3_L1_peaks.narrowPeak"))
+peaks_Ctrl_NF <- c(Control_1 = rtracklayer::import("NFpeaks/Kg_tdg_M_1_EKDL220003835-1a_HJ5T2DSX3_L1_peaks.narrowPeak"), Control_2 = rtracklayer::import("NFpeaks/Kg_tdg_M_3_EKDL220003836-1a_HJ5T2DSX3_L1_peaks.narrowPeak"))
+```
+blacklist
+```{r, eval=FALSE}
+blacklist <- import("/reference/Mus_musculus/mm10.blacklist_chrM.bed")
+blacklist
+seqlevelsStyle(blacklist) <- "ensembl"
+```
+
+
+```{r, eval=FALSE}
+#total consensus peaks (more than in one sample)
+x <- c(peaks_Ctrl_NF,peaks_TDG_NF)
+total_consensus_NFpeaks <- reduce(unlist(GRangesList(x)), with.revmap=TRUE)
+y <- keepStandardChromosomes(total_consensus_NFpeaks, pruning.mode = "coarse")
+total_consensus_NFpeaks <- granges(y[lengths(y$revmap)>1])
+blacklist <- import("/reference/Mus_musculus/mm10.blacklist_chrM.bed")
+seqlevelsStyle(blacklist) <- "ensembl"
+total_consensus_NFpeaks <- total_consensus_NFpeaks[!overlapsAny(total_consensus_NFpeaks, blacklist)]# thats how you get rid of blacklisted peaks!!!!
+total_consensus_NFpeaks
+
+# Tdg+/- consensus peaks (more than in one sample)
+x <- c(peaks_TDG_NF)
+TDG_consensus_NFpeaks <- reduce(unlist(GRangesList(x)), with.revmap=TRUE)
+y <- keepStandardChromosomes(TDG_consensus_NFpeaks, pruning.mode = "coarse")
+TDG_consensus_NFpeaks <- granges(y[lengths(y$revmap)>1]) #for standard chromosomes use keep this line of code
+blacklist <- import("/reference/Mus_musculus/mm10.blacklist_chrM.bed")
+seqlevelsStyle(blacklist) <- "ensembl"
+TDG_consensus_NFpeaks <- TDG_consensus_NFpeaks[!overlapsAny(TDG_consensus_NFpeaks, blacklist)]# thats how you get rid of blacklisted peaks!!!!
+TDG_consensus_NFpeaks
+```
+
+load motifs and check select non-redundant TFs
+```{r,eval =TRUE}
+core <- read_meme(file = "../object_resources/HOCOMOCOv11_core_MOUSE_mono_meme_format.meme") # needs to be the right path
+#full <- read_meme(file = "HOCOMOCOv11_full_MOUSE_mono_meme_format.meme") 
+
+
+# original function PL
+summary_core <- universalmotif::summarise_motifs(core)
+core <- setNames(object = core,nm = summary_core$name)
+  
+motifs <- core
+modf <- data.frame(row.names=summary_core$name,
+                     TF=gsub("_MOUSE.H11MO...+","",summary_core$name),
+                     grade=gsub(".+\\.","",summary_core$name),
+                     motif_rank = gsub("[^01]+","",gsub(".*MO.",replacement = "",summary_core$name))) #gsub("[^ro]+", "", str1)
+modf <- modf[order(modf$TF,modf$grade,modf$motif_rank),]
+modf <- modf[!duplicated(modf$TF),]
+modf <- modf[!modf$grade == "D",]
+motifs <- setNames(universalmotif::convert_motifs(motifs[row.names(modf)]), modf$TF)
+```
+
+import genome fasta file (GRCm38)
+```{r,eval=TRUE}
+genome <- Rsamtools::FaFile("../object_resources/Mus_musculus.GRCm38.dna_sm.primary_assembly.fa")
+genome
+```
+
+count reads in peaks 
+```{r}
+
+p <- resize(TDG_consensus_NFpeaks,width=250,fix="center")
+sc_np <- chromVAR::getCounts(c(bamfiles_ctrl,bamfiles_TDG), p, paired=TRUE)
+sc_np <- addGCBias(sc_np, genome=genome)
+
+# saveRDS(sc_np,"../object_resources/figure_5_meta/sc_np.rds")
+# sc_np <- readRDS("../object_resources/figure_5_meta/sc_np.rds")
+```
+
+convert motifs and perfrom compute Deviations
+```{r}
+set.seed(123)
+motifs <- do.call(what = "PFMatrixList", lapply(motifs, class="TFBSTools-PFMatrix", FUN= convert_motifs)) #old way and new with mouse hocomocov11 changed to lapply(motifs) from 
+motif_ix <- matchMotifs(motifs, sc_np, genome=genome)
+dev_np <- computeDeviations(object=sc_np, annotations=motif_ix, background_peaks = getBackgroundPeaks(sc_np,rowData(sc_np)$bias,niterations = 5000))
+```
+
+z-score distribution test
+```{r, eval=FALSE}
+d <- dplyr::bind_rows(lapply(as.list(as.data.frame(as.matrix(assays(dev_np)$z))),FUN=function(x) as.data.frame(as.matrix(x))), .id="sample")
+ggplot(d, aes(V1, colour=sample)) + geom_density() + xlab("z-score")
+```
+## normalization of z scores
+```{r}
+assays(dev_np)$norm <- scale(assays(dev_np)$z) 
+```
+
+```{r,eval= FALSE}
+d <- dplyr::bind_rows(lapply(as.list(as.data.frame(as.matrix(assays(dev_np)$norm))),FUN=function(x) as.data.frame(as.matrix(x))), .id="sample")
+ggplot(d, aes(V1, colour=sample)) + geom_density() + xlab("z-score")
+```
+
+```{r}
+# saveRDS(dev_np,"../object_resources/figure_5_meta/dev_np.rds")
+```
+
+
+
+```{r}
+# differential analysis
+dev_np <- readRDS("../object_resources/figure_5_meta/dev_np.rds")
+dev_np$groups <- c("wt","wt","Tdg +/-","Tdg +/-","Tdg +/-")
+dev_np$genotype <- c("wt","wt","Tdg +/-","Tdg +/-","Tdg +/-")
+dev_np$groups <-  relevel(factor(dev_np$groups), "wt")
+fit <- limma::lmFit(assays(dev_np)$norm, model.matrix(~dev_np$groups))
+head(mores1 <- topTable(eBayes(fit),number=Inf),400)
+metadata(dev_np)$anno_colors <- list(genotype=c(wt ="darkgrey", "Tdg +/-"="darkred"))
+colData(dev_np)
+```
+
+## generate figure C
+
+generate heatmap for C
+```{r}
+p3_2 <- sechm::sechm(dev_np[,order(dev_np$groups)], head(row.names(mores1),26), assayName = "norm", top_annotation="genotype", breaks=0.99,do.scale = "FALSE",name ="norm. z",gaps_at = "groups",show_annotation_legend = FALSE,row_names_gp = gpar(fontsize = 9),column_title_gp=gpar(fontface = "italic"))
+p3_2
+metadata(dev_np)
+```
+
+generate volcano plot for C
+```{r}
+highlight <- c("PRGR","ANDR","GCR")
+w <- head(which(mores1$adj.P.Val < 0.05  & !( rownames(mores1) %in% highlight)),30) #& !( rownames(mores1) %in% highlight)
+w2 <- mores1[rownames(mores1) %in% highlight,]
+p3_1 <- ggplot(mores1, aes(logFC, -log10(adj.P.Val ))) +
+  geom_point() +
+  geom_point(data=w2,color = "darkred",size = 3,aes(logFC, -log10(adj.P.Val )))+
+  #geom_text_repel(data=cbind(gene=row.names(mores1)[w], mores1[w,]), color="black", aes(label=gene),max.overlaps = 20,size=3)+
+  geom_text_repel(data=cbind(gene=row.names(w2),w2), color="darkred", aes(label=gene),nudge_x = 1.5,nudge_y = 0.1)+
+  geom_hline(yintercept=-log10(0.05), linetype="dashed")+
+  geom_text(aes(-5.5,-log10(0.05),label = "adj. p-value  = 0.05", vjust = 1))+
+  ggtitle(("Motif activity at accessible *Tdg +/-* sites"))+
+  theme(plot.title = ggtext::element_markdown())+
+  xlim(c(-7.5,9.5))+
+  xlab("activity norm. z-score logFC")
+```
+
+```{r, fig.width=11,fig.height=4}
+p3 <- plot_grid(p3_1, grid.grabExpr(draw(p3_2)), nrow=1, rel_heights=c(4,2), scale=0.95,ncol = 2)
+p3
+# saveRDS(p3,"../object_resources/figure_5_meta/motif actiivity.rds")
+# p3 <- readRDS("../object_resources/figure_5_meta/motif actiivity.rds")
+```
+
+generate motifs of TFs of interest
+
+load motifs and check select non-redundant TFs
+```{r,eval =TRUE}
+core <- read_meme(file = "../object_resources/HOCOMOCOv11_core_MOUSE_mono_meme_format.meme") # needs to be the right path
+#full <- read_meme(file = "HOCOMOCOv11_full_MOUSE_mono_meme_format.meme") 
+
+
+# original function PL
+summary_core <- universalmotif::summarise_motifs(core)
+core <- setNames(object = core,nm = summary_core$name)
+  
+motifs <- core
+modf <- data.frame(row.names=summary_core$name,
+                     TF=gsub("_MOUSE.H11MO...+","",summary_core$name),
+                     grade=gsub(".+\\.","",summary_core$name),
+                     motif_rank = gsub("[^01]+","",gsub(".*MO.",replacement = "",summary_core$name))) #gsub("[^ro]+", "", str1)
+modf <- modf[order(modf$TF,modf$grade,modf$motif_rank),]
+modf <- modf[!duplicated(modf$TF),]
+modf <- modf[!modf$grade == "D",]
+motifs <- setNames(universalmotif::convert_motifs(motifs[row.names(modf)]), modf$TF)
+```
+
+```{r,fig.width=11}
+p3_ml <- plot_grid(
+universalmotif::view_motifs(motifs$PRGR,)+geom_text(aes(x= 8, y= 1.75,,label = "PRGR"),size=3)+theme_void(),
+universalmotif::view_motifs(motifs$GCR)+geom_text(aes(x= 8, y= 1.75,,label = "GCR"),size=3)+theme_void(),
+universalmotif::view_motifs(motifs$ANDR)+geom_text(aes(x= 8, y= 1.75,,label = "ANDR"),size=3)+theme_void(),
+nrow =1,
+scale = 0.95,
+ncol = 3
+)
+p3_ml
+```
+
+```{r,fig.width=11,fig.height=5}
+p3_both <- plot_grid(p3,p3_ml , nrow=2, rel_heights=c(6,1), scale=0.95 )
+p3_both
+```
+
+
+# D
+## load and prepare data
+```{r, fig.width=8, fig.height=6}
+se <- readRDS("../object_resources/RNAseq_mESC_tdg.SE.rds")
+se$genotype
+se$genotype <- relevel(factor(se$genotype), "wt")
+
+
+
+#filter for genes with at least 20 counts
+dds <- calcNormFactors(DGEList(assay(se)))
+dds <- dds[filterByExpr(dds,model.matrix(~se$genotype),min.count=20),]
+se <- se[row.names(dds),]
+
+```
+
+
+
+
+
+generation of surrogate variables
+```{r}
+se <- SEtools::svacor(se, ~genotype)
+```
+
+```{r}
+form <- paste0("~genotype+",paste(grep("^SV[0-3]+",colnames(colData(se)),value=TRUE),collapse="+")) # there are 3 surrogate variables
+mm <- model.matrix(as.formula(form), data=as.data.frame(colData(se)))
+dds <- calcNormFactors(DGEList(assay(se)))
+dds <- estimateDisp(dds,mm)
+fit <- glmQLFit(dds, mm)
+tcoefs <- grep("^genotype",colnames(mm),value=TRUE)
+glrt <- as.data.frame(topTags(glmQLFTest(fit, tcoefs),Inf))
+rowData(se)$global.FDR <- glrt[row.names(se),"FDR"]
+for (x in tcoefs){
+  n <- gsub("genotype","DEA.",x)
+  y <- as.data.frame(topTags(glmQLFTest(fit, x),Inf))
+  rowData(se)[[n]] <- y[row.names(se),]
+}
+lapply(sechm::getDEA(se),FUN=function(x) hist(x$PValue))
+```
+
+calculation of log fold change 
+```{r}
+se <- SEtools::log2FC(se, "corrected", se$genotype=="wt", isLog = TRUE)
+se <- se[,order(se$genotype)]
+
+metadata(se)$default_view <- list(assay="log2FC", gaps_at="genotype",
+                                  top_annotation=c("wt"))
+metadata(se)$default_view$groupvar <- metadata(se)$default_view$colvar <- NULL
+```
+
+pick top significantly diff expressed genes and heatmap
+```{r, fig.width=10}
+deas <- getDEA(se)
+gdegs <- row.names(se)[head(order(rowData(se)$global.FDR),20)]
+
+se$anno  <- c("wt","wt","wt","Tdg +/-","Tdg +/-","Tdg +/-","ko","ko","ko","ko")
+se$anno <- relevel(factor(se$anno), "wt")
+metadata(se)$anno_colors <- list(genotype=c(wt="lightgrey", het="darkred"))
+
+dea <- deas$het
+dea$gene <- rownames(dea)
+dea <- dea[order(dea$FDR),]
+
+s1 <- sechm(se[,!se$genotype=="ko"], head(rownames(dea),20),assayName = "log2FC", gaps_at = "anno",do.scale = FALSE,top_annotation = "genotype",show_annotation_legend = FALSE,column_title_gp=gpar(fontface = "italic"))
+
+#deasdeadegs <- lapply(deas, FUN=function(x) row.names(x)[x$FDR<0.05]) # check for genes passign the FDR
+
+```
+
+```{r,fig.width=12}
+dea <- deas$het
+dea$gene <- rownames(dea)
+dea <- dea[order(dea$FDR),]
+s2 <- ggplot(dea, aes(logFC, -log10(FDR))) + 
+  geom_point() +
+  ggrepel::geom_text_repel(data=head(dea[dea$FDR<0.05  ,],15),size=4,aes(label=gene),max.overlaps = 20,nudge_y = 0.25)+
+  ggtitle("Differentially expressed genes in *Tdg +/-* mESC")+
+  xlim(c(-5,5))+
+  theme(plot.title = ggtext::element_markdown())
+s2
+```
+
+```{r, fig.width=10, fig.height=4}
+s7 <- plot_grid(s2,grid.grabExpr(draw(s1)),labels = c("A","B"),rel_widths = c(3,2))
+s7
+
+pdf("figure_7_sup_meta.pdf", width=10, height=4)
+s7
+dev.off()
+```
+
+```{r}
+mreg <- readRDS("../object_resources/regulon.rds")
+```
+
+viper-limma
+```{r}
+vi <- viper(assays(se)$corrected, mreg, pleiotropy=TRUE, verbose=FALSE)
+vi <- SummarizedExperiment(list(viper=vi), colData=colData(se))
+metadata(vi) <- metadata(se)
+vi <- SEtools::log2FC(vi, "viper", vi$genotype=="wt", isLog=TRUE)
+fit <- eBayes(lmFit(assay(vi), model.matrix(~vi$genotype,data=as.data.frame(colData(vi)))))
+vires <- as.data.frame(topTable(fit, "vi$genotypehet", Inf))
+rowData(vi)$DEA.viper <- vires[row.names(vi),]
+vires$TF <- row.names(vires)
+vires$rank <- 1:nrow(vires)
+```
+
+
+## generate figure 4
+
+```{r,eval=FALSE}
+label1 <- c("ESR2","TEAD2","HXA9","CEBPD","PRDM1")
+label2 <- "ANDR"
+highlight <- "Ar"
+w <- vires[rownames(vires) %in% highlight,]
+p4_1 <- ggplot(vires, aes(logFC, -log10(adj.P.Val), label=TF)) + 
+  geom_point() +
+  geom_point(data=w,color = "darkred",size = 3,aes(logFC, -log10(adj.P.Val )))+
+  ggrepel::geom_text_repel(data=head(vires[vires$adj.P.Val<0.001 &!(rownames(vires) %in% highlight) ,],5),aes(label = label1),nudge_x = -0.15,nudge_y = 1.75, min.segment.length=0,size=3)+
+  geom_text_repel(data=cbind(gene=rownames(w),w), color="darkred", aes(label=label2,nudge_x = 0.75,nudge_y = 5))+
+  ggtitle("Inferred TF activity in *Tdg +/-* of mESC")+
+  theme(plot.title = ggtext::element_markdown())+
+  xlab("log2FC")
+p4_1
+```
+
+### New Fig. adjusted to recommendations (p-value threshold)
+```{r}
+label1 <- c("ESR2","TEAD2","HXA9","CEBPD")
+label2 <- "ANDR"
+highlight <- "Ar"
+w <- vires[rownames(vires) %in% highlight,]
+p4_1 <- ggplot(vires, aes(logFC, -log10(adj.P.Val), label=TF)) + 
+  geom_point() +
+  geom_point(data=w,color = "darkred",size = 3,aes(logFC, -log10(adj.P.Val )))+
+  ggrepel::geom_text_repel(data=head(vires[vires$adj.P.Val<0.001 &!(rownames(vires) %in% highlight) ,],4),aes(label = label1),nudge_x = -0.15,nudge_y = 1.75, min.segment.length=0,size=3)+
+  geom_text_repel(data=cbind(gene=rownames(w),w), color="darkred", aes(label=label2,nudge_x = 0.75,nudge_y = 5))+
+  ggtitle("Inferred TF activity in *Tdg +/-* of mESC")+
+  theme(plot.title = ggtext::element_markdown())+
+  xlab("log2FC")
+p4_1 <- p4_1 +geom_hline(yintercept=-log10(0.05), linetype="dashed")+ geom_text(aes(0.75,-log10(0.05),label = "adjst.p-value = 0.05", vjust = -1.0),size = 3.0)
+```
+
+
+
+
+### with new recommendations
+```{r}
+
+vi$genotype <- relevel(vi$genotype,"wt")
+vi$genotype
+vi$anno  <- c("wt","wt","wt","Tdg +/-","Tdg +/-","Tdg +/-","ko","ko","ko","ko")
+#vi$anno <- c("wt","wt","Tdg +/-","Tdg +/-","ko","ko","ko","wt","Tdg +/-","ko")
+vi$anno <- relevel(factor(vi$anno), "wt")
+metadata(vi)$anno_colors <- list(genotype=c(wt="lightgrey", het="darkred"))
+
+# test for order of TFs
+sechm::sechm(vi[,!vi$genotype=="ko"], head(vires$TF,5), assayName="log2FC", top_annotation = "genotype",do.scale = FALSE,gaps_at = "genotype",show_annotation_legend = FALSE,column_title_gp=gpar(fontface = "italic"))
+gene_labels <-  c("ANDR","CEBPD","TEAD2","HXA9","ESR2") # important check if original order fits with gene_labels
+gene_labels <- c("ESR2","HXA9","CEBPD","TEAD2","ANDR")
+
+vi2 <- vi
+# this is done to match nomenclature
+rownames(vi2)[rownames(vi2) %in% c("Ar","Cebpd","Esr2","Hoxa9","Tead2")] <- c("ANDR","CEBPD","ESR2","HXA9","TEAD2")
+
+p4_2 <- sechm::sechm(vi2[,!vi2$genotype=="ko"], c("ANDR","CEBPD","ESR2","HXA9","TEAD2"), assayName="log2FC", top_annotation = "genotype",do.scale = FALSE,gaps_at = "anno",show_annotation_legend = FALSE,column_title_gp=gpar(fontface = "italic"))
+p4_2
+
+```
+
+
+
+```{r,fig.width=11,fig.height=4}
+p4_3 <- plot_grid(p4_1, grid.grabExpr(draw(p4_2)), nrow=1, rel_heights=c(4,2), scale=0.95,ncol = 2)
+p4_3
+#saveRDS(p4_3,"../object_resources/figure_5_meta/p4_3_inferred_motif_activity.rds")
+#p4_3 <- readRDS("../object_resources/figure_5_meta/p4_3_inferred_motif_activity.rds") 
+```
+
+
+## joint as figure 5
+
+```{r, fig.width=11, fig.height=12}
+pp1 <- plot_grid(grid.grabExpr(draw(p1)),grid.grabExpr(draw(p2)),ncol = 2,labels = c("A","B"))
+
+pp2 <- plot_grid(pp1,p3_both,p4_3, nrow = 3, labels = c(NA,"C","D"),rel_heights = c(3,3,2))
+
+
+
+pp2
+pdf("figure_5_meta.pdf", width=11, height=12)
+pp2
+dev.off()
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
+

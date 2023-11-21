@@ -1,0 +1,251 @@
+---
+title: "figure_2_sup"
+author: "Vincent Fischer"
+date: "22 11 2022"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: spacelab
+    code_folding: hide
+    fig_width: 12
+    df_print: paged
+    number_sections: true
+    
+
+---
+<style type="text/css">
+.main-container {
+  max-width: 75% !important;
+  margin: auto;
+}
+</style>
+
+```{r}
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(rtracklayer)
+  library(GenomicRanges)
+  library(ggplot2)
+  library(ComplexHeatmap)
+  library(chromVAR)
+  library(motifmatchr)
+  library(memes)
+  library(MotifDb)
+  library(universalmotif)
+  library(TFBSTools)
+  library(AnnotationHub)
+  library(RColorBrewer)
+  library(viridis)
+  library(viridisLite)
+  library(cowplot)
+})
+theme_set(theme_bw())
+set.seed(123)
+```
+
+load ATAC data for TDG_KO 
+
+```{r}
+bamfiles_ctrl <- list.files("../Tdg_wt/aligned/",pattern = "^Kg_tdg_M(.*)\\.bam$", full =TRUE)
+bamfiles_TDG <- list.files("../Tdg_wt/aligned/",pattern = "^Kg_tdg_ko(.*)\\.bam$", full =TRUE)
+
+names(bamfiles_ctrl) <- c("wt_1", "wt_2")
+names(bamfiles_TDG) <- c("tdg +/- 1", "tdg +/- 2","tdg +/- 3")
+```
+
+
+```{r}
+Ctrl_Full_bigwig <- list.files("../Tdg_wt//tracks/",pattern = "^Kg_tdg_M(.*).bw$", full =TRUE)
+
+Tdg_Full_bigwig <- list.files("../Tdg_wt//tracks/",pattern = "^Kg_tdg_ko(.*).bw$", full =TRUE)
+```
+
+give names to the tracks
+```{r}
+names(Ctrl_Full_bigwig)<- c("wt_1", "wt_2")
+
+names(Tdg_Full_bigwig) <- c(c("tdg +/- 1", "tdg +/- 2","tdg +/- 3"))
+
+total_bw_list <- c(Ctrl_Full_bigwig,Tdg_Full_bigwig)
+```
+
+load peaks
+
+peaks
+```{r}
+peaks_TDG_BP <- c(TDG_KO1_BP = rtracklayer::import("../Tdg_wt/peaks/peaks/Kg_tdg_ko_1_EKDL220000948-1a_H22J7DSX3_L2_peaks.broadPeak"), TDG_KO2_BP = rtracklayer::import("../Tdg_wt/peaks/peaks/Kg_tdg_ko_2_EKDL220003833-1a_HJ5T2DSX3_L1_peaks.broadPeak"),TDG_KO3_BP = rtracklayer::import("../Tdg_wt/peaks/peaks/Kg_tdg_ko_3_EKDL220003834-1a_HJ5T2DSX3_L1_peaks.broadPeak"))
+peaks_Ctrl_BP <- c(Control_1 = rtracklayer::import("../Tdg_wt/peaks/peaks/Kg_tdg_M_1_EKDL220003835-1a_HJ5T2DSX3_L1_peaks.broadPeak"), Control_2 = rtracklayer::import("../Tdg_wt/peaks/peaks/Kg_tdg_M_3_EKDL220003836-1a_HJ5T2DSX3_L1_peaks.broadPeak"))
+
+
+```
+
+blacklist
+```{r}
+
+blacklist <- import("../object_resources/mm10.blacklist_chrM.bed")
+blacklist
+seqlevelsStyle(blacklist) <- "ensembl"
+```
+
+get consensus peaks
+```{r}
+###total
+x <- c(peaks_Ctrl_BP,peaks_TDG_BP)
+total_consensus_peaks <- reduce(unlist(GRangesList(x)), with.revmap=TRUE)
+y <- keepStandardChromosomes(total_consensus_peaks, pruning.mode = "coarse")
+total_consensus_peaks <- granges(y[lengths(y$revmap)>1])
+seqlevelsStyle(blacklist) <- "ensembl"
+total_consensus_peaks <- total_consensus_peaks[!overlapsAny(total_consensus_peaks, blacklist)]# thats how you get rid of blacklisted peaks!!!!
+total_consensus_peaks
+
+total_consensus_peaks_2000 <- total_consensus_peaks[width(total_consensus_peaks)<=2000]
+
+x <- c(peaks_TDG_BP)
+TDG_consensus_peaks <- reduce(unlist(GRangesList(x)), with.revmap=TRUE)
+y <- keepStandardChromosomes(TDG_consensus_peaks, pruning.mode = "coarse")
+TDG_consensus_peaks <- granges(y[lengths(y$revmap)>1]) #for standard chromosomes use keep this line of code
+seqlevelsStyle(blacklist) <- "ensembl"
+TDG_consensus_peaks <- TDG_consensus_peaks[!overlapsAny(TDG_consensus_peaks, blacklist)]# thats how you get rid of blacklisted peaks!!!!
+TDG_consensus_peaks
+```
+
+
+import 5fC/no5fC sites
+```{r}
+sites_5fC <- readRDS("../object_resources/5fC/sites_5fC.rds")
+sites_no5fC <- readRDS("../object_resources/5fC/sites_no5fC.rds")
+```
+
+import TSS with and without 5fC in proximity
+```{r}
+TSS_2KB_5fC <- readRDS("../object_resources/5fC/TSS_2KB_5fC.rds")
+TSS_2KB_no5fC <- readRDS("../object_resources/5fC/TSS_2KB_no5fC.rds")
+```
+
+
+
+calculation of normfactor
+generation of normalization factors
+```{r}
+# background normalization
+bg_nf_full <- bwNormFactors(total_bw_list, method = "background")
+```
+
+
+# A
+```{r,fig.width=15}
+p1 <- fragSizesDist(x = c(bamfiles_ctrl, bamfiles_TDG),what = "1")+ xlim(0,600)+  scale_x_continuous(n.breaks = 22)+scale_color_brewer(palette = "Dark2")+theme(text = element_text(size = 12))+ggtitle("Fragment Size Distribution (Chr1)") 
+```
+```{r}
+p1 <- fragSizesDist(x = c(bamfiles_ctrl, bamfiles_TDG),what = "1")+ xlim(0,600)+scale_color_brewer(palette = "Dark2")+theme(text = element_text(size = 12))+ggtitle("Fragment Size Distribution (Chr1)") 
+```
+```{r}
+p1+theme(legend.text = element_text(face="italic"))
+# saveRDS(p1+theme(legend.text = element_text(face="italic")),"../object_resources/figure_6_sup_meta/p1.rds")  
+# p1 <- readRDS("../object_resources/figure_6_sup_meta/p1.rds")
+```
+
+
+# B
+
+broad total consensus peaks
+```{r}
+m_bp_total <- signal2Matrix(total_bw_list,regions = total_consensus_peaks_2000,w = 10L)
+m_bp_total_bg <- rescaleSignalMatrices(m_bp_total,bg_nf_full)
+```
+```{r}
+
+# saveRDS(m_bp_total_bg,"../object_resources/figure_6_sup_meta/m_bp_total_bg.rds")
+
+m_bp_total_bg <- readRDS("../object_resources/figure_6_sup_meta/m_bp_total_bg.rds")
+```
+
+
+```{r, fig.width=12}
+names(m_bp_total_bg) <- c("wt 1","wt 2","Tdg +|- 1","Tdg +|- 2","Tdg +|- 3")
+p2 <- plotEnrichedHeatmaps(m_bp_total_bg,raster_resize_mat = TRUE , row_title="Accessible regions",scale_title = "backgr. \nnorm.\ndensity", colors = rocket(100),column_title_gp=gpar(fontface = "italic"),row_title_gp = gpar(fontsize = 11),top_annotation = FALSE, use_raster = TRUE)
+p2
+```
+
+```{r}
+# saveRDS(p2,"../object_resources/figure_6_sup_meta/p2.rds")
+# p2 <- readRDS("../object_resources/figure_6_sup_meta/p2.rds")
+```
+
+# C
+```{r}
+m_5fC <- signal2Matrix(c(total_bw_list),w = 10L, regions = sites_5fC)
+m_5fC_bg <- rescaleSignalMatrices(m_5fC,bg_nf_full)
+```
+
+```{r}
+
+#saveRDS(m_5fC_bg,"../object_resources/figure_6_sup_meta/m_5fC_bg.rds")
+#m_5fC_bg <- readRDS("../object_resources/figure_6_sup_meta/m_5fC_bg.rds")
+```
+
+plotting heatmaps
+```{r, fig.width=12}
+
+names(m_5fC_bg) <- c("wt 1","wt 2","Tdg +|- 1","Tdg +|- 2","Tdg +|- 3")
+p3 <- plotEnrichedHeatmaps(m_5fC_bg,raster_resize_mat = TRUE, row_title="5fC sites",scale_title = "backgr. \nnorm. \ndensity",colors = rocket(100),column_title_gp=gpar(fontface = "italic"),row_title_gp = gpar(fontsize = 11),top_annotation = FALSE, use_raster = TRUE)
+```
+
+```{r}
+p3
+```
+```{r}
+# saveRDS(p3,"../object_resources/figure_6_sup_meta/p3.rds")
+# p3 <- readRDS("../object_resources/figure_6_sup_meta/p3.rds")
+```
+
+
+# D
+
+generation of signal matrices for 5fC TSS
+```{r}
+
+m_TSS_5fC <- signal2Matrix(total_bw_list,w = 10L, regions = TSS_2KB_5fC)
+m_TSS_5fC_bg <- rescaleSignalMatrices(m_TSS_5fC,bg_nf_full)
+```
+
+```{r}
+# saveRDS(m_TSS_5fC,"../object_resources/figure_6_sup_meta/m_TSS_5fC.rds")
+# saveRDS(m_TSS_5fC_bg,"../object_resources/figure_6_sup_meta/m_TSS_5fC_bg.rds")
+# m_TSS_5fC_bg <- readRDS("../object_resources/figure_6_sup_meta/m_TSS_5fC_bg.rds")
+
+names(m_TSS_5fC_bg) <- c("wt 1","wt 2","Tdg +|- 1","Tdg +|- 2","Tdg +|- 3")
+```
+
+
+plotting heatmaps
+```{r, fig.width=12.3}
+
+p4 <- plotEnrichedHeatmaps(m_TSS_5fC_bg,raster_resize_mat = TRUE, row_title="TSS with 5fC",scale_title = "backgr. \nnorm.\ndensity", axis_name = c("-2kb","TSS","+2kb"),colors = rocket(100),column_title_gp=gpar(fontface = "italic"),row_title_gp = gpar(fontsize = 11),top_annotation = FALSE,use_raster = TRUE)
+print(p4)
+
+
+```
+
+
+```{r}
+# saveRDS(p4,"../object_resources/figure_6_sup_meta/p4.rds")
+# p4 <- readRDS("../object_resources/figure_6_sup_meta/p4.rds")
+```
+
+
+# joint
+```{r,fig.height=11, fig.width=8}
+pp <- plot_grid(p1,grid::grid.grabExpr(draw(p2)),grid::grid.grabExpr(draw(p3)),grid::grid.grabExpr(draw(p4)),nrow = 4,labels =c("A","B","C","D"),ncol = 1)
+pp
+
+pdf("figure_6_sup_meta.pdf", width=9, height=8)
+pp
+dev.off()
+```
+
+```{r}
+sessionInfo()
+```
+
