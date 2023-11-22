@@ -1,0 +1,294 @@
+---
+title: "figure_5_sup"
+author: "Vincent Fischer"
+date: "18 11 2022"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: spacelab
+    code_folding: hide
+    fig_width: 12
+    df_print: paged
+    number_sections: true
+    
+
+---
+<style type="text/css">
+.main-container {
+  max-width: 75% !important;
+  margin: auto;
+}
+</style>
+
+```{r}
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(rtracklayer)
+  library(GenomicRanges)
+  library(ggplot2)
+  library(ComplexHeatmap)
+  library(chromVAR)
+  library(motifmatchr)
+  library(memes)
+  library(MotifDb)
+  library(universalmotif)
+  library(TFBSTools)
+  library(AnnotationHub)
+  library(ggrepel)
+  library(base)
+  library(cowplot)
+})
+theme_set(theme_bw())
+```
+
+# A
+check fragSize pattern (chr1)
+```{r,fig.width=15}
+p1 <- fragSizesDist(x = c("Veh. 1"="../Dex_Veh/aligned_full/Veh4.bam","Veh. 2" ="../Dex_Veh/aligned_full/Veh5.bam"),what = "1")+xlim(0,600)+scale_color_brewer(palette = "Dark2")+theme(text = element_text(size = 20))+ggtitle("FragmentSize Distribution (Chr1) of mouse ATACseq data") 
+p1
+saveRDS(p1,"../object_resources/figure_5_sup_meta/p1.rds")
+```
+
+# B
+load and prepare data
+load motifs
+```{r}
+core <- read_meme(file = "../object_resources/HOCOMOCOv11_core_MOUSE_mono_meme_format.meme")
+#full <- read_meme(file = "HOCOMOCOv11_full_MOUSE_mono_meme_format.meme")
+
+
+# original function PL
+summary_core <- universalmotif::summarise_motifs(core)
+core <- setNames(object = core,nm = summary_core$name)
+  
+motifs <- core
+modf <- data.frame(row.names=summary_core$name,
+                     TF=gsub("_MOUSE.H11MO...+","",summary_core$name),
+                     grade=gsub(".+\\.","",summary_core$name),
+                     motif_rank = gsub("[^0123]+","",gsub(".*MO.",replacement = "",summary_core$name))) #gsub("[^ro]+", "", str1)
+modf <- modf[order(modf$TF,modf$grade,modf$motif_rank),]
+modf <- modf[!duplicated(modf$TF),]
+modf <- modf[!modf$grade == "D",]
+motifs <- setNames(universalmotif::convert_motifs(motifs[row.names(modf)]), modf$TF)
+```
+load 5fC and no5fC sites
+```{r}
+sites_5fC <- readRDS("../object_resources/5fC/sites_5fC.rds")
+sites_no5fC <- readRDS("../object_resources/5fC/sites_no5fC.rds")
+```
+
+load 5fC and no5fC sites in proximity to a TSS
+```{r}
+unique_5fC_sites_in_TSS <- readRDS("../object_resources/5fC/unique_5fC_sites_in_TSS.rds")
+unique_no5fC_sites_in_TSS <- readRDS("../object_resources/5fC/unique_no5fC_sites_in_TSS.rds")
+```
+
+
+
+load reference genome fasta (GRCm38)
+```{r}
+genome <- Rsamtools::FaFile("../object_resources/Mus_musculus.GRCm38.dna_sm.primary_assembly.fa")
+```
+
+
+MotifEnrichment
+```{r}
+peak_centers <- resize(unique_5fC_sites_in_TSS,fix = "center",width = 200)
+peak_seqs <- memes::get_sequence(dropSeqlevels(peak_centers,"MT",pruning.mode = "coarse"), genome)# dropping MT due to its absence in  reference genome file
+peak_centers <- resize(unique_no5fC_sites_in_TSS,fix = "center",width = 200)
+peak_seqs_no5fC <- memes::get_sequence(dropSeqlevels(peak_centers,"MT",pruning.mode = "coarse"), genome)# dropping MT due to its absence in  reference genome file
+
+ame1 <- runAme(peak_seqs,control = peak_seqs_no5fC , database=convert_motifs(motifs), meme_path="/common/meme/bin/")
+head(ame1)
+saveRDS(ame1,"../object_resources/figure_5_sup_meta/AME_1_5fC_no5fC_TSS.rds")
+ame1 <- readRDS("../object_resources/figure_5_sup_meta/AME_1_5fC_no5fC_TSS.rds")
+
+```
+
+```{r}
+ame1$motif <- basename(ame1$motif_db)
+```
+
+```{r fig.width=10, include=TRUE}
+p2 <- ggplot(ame1, aes(log2(((tp/pos))/((fp/neg))), -log10(adj.pvalue))) + 
+  geom_point(alpha=0.7, size =1.5) + geom_text_repel(data=head((ame1),15), aes(label=motif),max.overlaps = 20, size = 2.5)+
+  labs(x="log2FE")+ xlim(c(0,2.6))+theme(text = element_text(size = 9))+ggtitle("5fC compared to no5fC sites in TSS proximity")
+p2
+```
+
+# C
+MotifEnrichment
+```{r,eval=TRUE}
+peak_centers <- reduce(resize(sites_5fC, fix="center", width=200))
+peak_seqs <- memes::get_sequence(dropSeqlevels(peak_centers,"MT",pruning.mode = "coarse"), genome)# dropping MT due to its absence in  reference genome file
+peak_centers <- reduce(resize(sites_no5fC, fix="center", width=200))
+peak_seqs_no5fC <- memes::get_sequence(dropSeqlevels(peak_centers,"MT",pruning.mode = "coarse"), genome = genome)# dropping MT due to its absence in  reference genome file
+
+
+ame2 <- runAme(peak_seqs,control = peak_seqs_no5fC , database=convert_motifs(motifs), meme_path="/common/meme/bin/")
+
+# saveRDS(ame2,"../object_resources/figure_5_sup_meta/AME_2_total_5fC_no5fC.rds")
+# ame2 <- readRDS("../object_resources/figure_5_sup_meta/AME_2_total_5fC_no5fC.rds")
+```
+
+```{r}
+ame2$motif <- basename(ame2$motif_db)
+```
+
+```{r fig.width=10, include=TRUE}
+p3 <- ggplot(ame2, aes(log2(((tp/pos))/((fp/neg))), -log10(adj.pvalue))) + 
+  geom_point(alpha=0.7, size =1.5) + geom_text_repel(data=head((ame2),15), aes(label=motif),max.overlaps = 20, size = 2.5)+
+  #geom_text_repel(data=ame10_2[ame10_2$motif_id=="SOX2",], aes(label=motif_id),max.overlaps = 20, size = 5)+
+  labs(x="log2FE")+ xlim(c(0,3))+theme(text = element_text(size = 9))+ggtitle("Total 5fC compared to no5fC sites")
+p3
+```
+# D
+```{r}
+motifEA <- function(regions, background=NULL, motifHits, motifColumn="type",
+                    forceSeqStyle="ensembl", 
+                    alternative=c("two.sided", "greater", "less"),ncores=10){
+  if(is.character(motifHits) && all(grepl("\\.rds$", motifHits)))
+    motifHits <- readRDS(motifHits)
+  stopifnot(is(regions, "GRanges") && is(motifHits, "GRanges"))
+  stopifnot(!is.null(mcols(motifHits)[[motifColumn]]))
+  if(is.null(background)){
+    if(length(unique(mcols(motifHits)[[motifColumn]]))>30){
+      stop("Not yet implemented without background")
+      message("No background provided; will use the median overlap rate across motifs.")
+    }else{
+      stop("No background provided, and insufficient number of motifs to estimate it.")
+    }
+  }else{
+    stopifnot(is(background, "GRanges"))
+  }
+  
+  if(is.character(mcols(motifHits)[[motifColumn]])){
+    mcols(motifHits)[[motifColumn]] <- as.factor(mcols(motifHits)[[motifColumn]])
+  }
+  if(!is.null(forceSeqStyle)){
+    seqlevelsStyle(regions) <- forceSeqStyle
+    seqlevelsStyle(motifHits) <- forceSeqStyle
+    if(!is.null(background)) seqlevelsStyle(background) <- forceSeqStyle
+  }
+  names(motifs) <- motifs <- levels(mcols(motifHits)[[motifColumn]])
+  ov.bg <- NA_integer_
+  res <- BiocParallel::bplapply(motifs, BPPARAM=BiocParallel::MulticoreParam(ncores),
+                                FUN=function(x){
+    h <- reduce(motifHits[which(mcols(motifHits)[[motifColumn]]==x)])
+    tot <- length(h)
+    ov <- sum(overlapsAny(regions, h))
+    if(!is.null(background)) ov.bg <- sum(overlapsAny(background, h))
+    c(tot,ov,ov.bg)
+  })
+  res <- as.data.frame(t(as.matrix(dplyr::bind_rows(res))))
+  rm(motifHits)
+  colnames(res) <- c("total","ov.sig","ov.bg")
+  if(!is.null(background)){
+    expected <- res$ov.bg*length(regions)/length(background)
+    res$log2FE <- log2((1+res$ov.sig)/(1+expected))
+    res$PValue <- fisher.test.p(res$ov.sig, rep(length(regions),nrow(res)),
+                                res$ov.bg, rep(length(background),nrow(res)),
+                                alternative=alternative)
+  }else{
+    # mod <- lm(ov.sig~total, data=res)
+    # res$expected <- pmax(0, predict(mod, newdata=res))
+    # res$log2FE <- (1L+res$ov.sig)/(1L+res$expected)
+    # res$PValue <- switch(match.arg(alternative),
+    #   
+  }
+  res$FDR <- p.adjust(res$PValue, method="holm")
+  res
+}
+
+# fast vectorized fisher's test
+fisher.test.p <- function (a, b, c, d, 
+                           alternative=c("two.sided", "greater", "less")){
+  fn <- switch( match.arg(alternative), 
+     less = function(x,m,n,k) phyper(x, m, n, k), 
+     greater = function(x,m,n,k) phyper(x - 1, m, n, k, lower.tail=FALSE), 
+     two.sided = function(x,m,n,k){
+       lo <- max(0, k - n)
+       support <- seq(from=lo, to=min(k, m))
+       d <- dhyper(support, m, n, k, log = TRUE)
+       d <- exp(d - max(d))
+       d <- d/sum(d)
+       sum(d[d <= d[x - lo + 1] * (1 + 10^(-7))])
+     }
+  )
+  mapply(FUN=fn, a, a+c, b+d, a+b)
+}
+```
+
+
+```{r, eval=TRUE}
+moi <- readRDS("../object_resources//archetype_hits.GR.rds")
+seqlevelsStyle(moi) <- "ensembl"
+moi$type <- as.factor(moi$type)
+```
+
+```{r}
+archtype_enrich<-motifEA(regions = reduce(resize(sites_5fC,width = 200,fix = "center")),background = reduce(resize(sites_no5fC,width = 200,fix = "center")), motifHits = moi)
+```
+
+```{r}
+arch <- readRDS("../object_resources//archetypes.rds")
+arch <- arch[!duplicated(arch[,2]),]
+row.names(arch) <- arch[,2]
+archtype_enrich$TFs <- arch[row.names(archtype_enrich),"TFs"]
+archtype_enrich$label <- paste0(row.names(archtype_enrich), " (", archtype_enrich$TFs,")")
+
+```
+
+```{r}
+archtype_enrich <- archtype_enrich[sort.list(archtype_enrich$PValue, decreasing = FALSE),]
+archtype_enrich
+```
+
+```{r}
+# saveRDS(archtype_enrich,"../object_resources/figure_5_sup_meta/archtype_enrich.list.rds")
+archtype_enrich <- readRDS("../object_resources/figure_5_sup_meta/archtype_enrich.list.rds")
+```
+
+
+```{r fig.width=10, include=TRUE}
+p4 <- ggplot(archtype_enrich, aes(log2FE, -log10(FDR))) + 
+  geom_point(alpha=0.7, size =1.5) + geom_text_repel(data=head(cbind(gene=row.names(archtype_enrich), archtype_enrich),15), aes(label=gene),max.overlaps = 20, size = 2.5)+
+  labs(x="log2FE")+ xlim(c(-2,3))+theme(text = element_text(size = 9))+ggtitle("Archetypes of 5fC compared to no5fC sites ")
+p4
+```
+
+
+
+## joint without p1
+```{r,fig.width=10, fig.height=7.5}
+pp <- plot_grid(p2,p3,p4,nrow = 2,ncol = 2,labels = c("A","B","C"))
+pp
+
+
+pdf("figure_5_sup_meta.pdf", width=10, height=7.5)
+pp
+dev.off()
+```
+
+# Additional FragSize for new sup fig.3 Trans.Psychiatry
+check fragSize pattern (chr1)
+```{r,fig.width=15}
+p5 <- fragSizesDist(x = c("Veh. 1"="../Dex_Veh/aligned_full/Veh4.bam","Veh. 2" ="../Dex_Veh/aligned_full/Veh5.bam", "Dex. 1" = "../Dex_Veh/aligned_full/Dex1.bam", "Dex. 2" = "../Dex_Veh/aligned_full/Dex2.bam", "Dex. 3" = "../Dex_Veh/aligned_full/Dex3.bam" ),what = "1")+xlim(0,600)+scale_color_brewer(palette = "Dark2")+theme(text = element_text(size = 20))+ggtitle("FragmentSize Distribution (Chr1) of mouse ATACseq data") 
+p5
+# saveRDS(p5,"../object_resources/figure_5_sup_meta/FragSize_DexVeh.rds")
+# p5 <- readRDS("Trans.Psychiatry/FragSize_DexVeh.rds")
+```
+
+```{r}
+pdf("figure_3_sup_meta.pdf", width=15, height=7.5)
+p5
+dev.off()
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
