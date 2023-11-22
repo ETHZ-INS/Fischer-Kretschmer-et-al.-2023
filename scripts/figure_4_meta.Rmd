@@ -1,0 +1,302 @@
+---
+title: "figure_4"
+author: "Vincent Fischer"
+date: "16 11 2022"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: spacelab
+    code_folding: hide
+    fig_width: 12
+    df_print: paged
+    number_sections: true
+    
+
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 75% !important;
+  margin: auto;
+}
+</style>
+
+```{r}
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(rtracklayer)
+  library(GenomicRanges)
+  library(ggplot2)
+  library(ComplexHeatmap)
+  library(chromVAR)
+  library(motifmatchr)
+  library(memes)
+  library(MotifDb)
+  library(universalmotif)
+  library(TFBSTools)
+  library(AnnotationHub)
+  library(RColorBrewer)
+  library(viridis)
+  library(viridisLite)
+  library(ggrepel)
+  library(magick)
+  library(ggpubr)
+  library(cowplot)
+})
+theme_set(theme_bw())
+set.seed(123)
+```
+
+
+# A
+## load and prepare Data
+load signal files load Veh track for NF,Mono and Full; and give names
+```{r}
+bw_ATAC_mono <- list.files(path = "../Dex_Veh/tracks/", pattern ="*Veh.(.*)mono.bw",full.names = TRUE )
+bw_ATAC_nf <- list.files(path = "../Dex_Veh/tracks/", pattern ="*Veh.(.*)NF.bw",full.names = TRUE )
+bw_ATAC_full <- list.files(path = "../Dex_Veh/tracks/", pattern ="*Veh.(.*)full.bw",full.names = TRUE )
+
+
+names(bw_ATAC_mono) <- c("ATAC_Mono_1","ATAC_Mono_2")
+names(bw_ATAC_nf) <- c("ATAC_NF_1","ATAC_NF_2")
+names(bw_ATAC_full) <- c("ATAC_Full_1","ATAC_Full_2")
+
+```
+
+import 5fC sites and getting unique 5fC and no5fC sites
+```{r}
+sites_5fC <- readRDS("../object_resources/5fC/sites_5fC.rds")
+sites_no5fC <- readRDS("../object_resources/5fC/sites_no5fC.rds")
+```
+
+
+load TSS with and without 5fC
+
+```{r}
+TSS_2KB_5fC <- readRDS("../object_resources/5fC/TSS_2KB_5fC.rds")
+TSS_2KB_no5fC <- readRDS("../object_resources/5fC/TSS_2KB_no5fC.rds")
+```
+
+generation of normalization factors
+```{r}
+bg_nf <- bwNormFactors(c(bw_ATAC_nf,bw_ATAC_mono,bw_ATAC_full), method = "background")
+```
+
+sample no5fC regions to match 
+```{r}
+ 
+sampled_no5fC <- TSS_2KB_no5fC[sample(c(1:length(TSS_2KB_no5fC)),size = length(TSS_2KB_5fC))] 
+list_5fC_no5fC <- unlist(GRangesList(TSS_2KB_5fC,sampled_no5fC))
+
+```
+
+cluster regions 5fC top and no5fC bottom
+```{r}
+# cluster regions 5fC top and no5fC bottom
+i <- integer(length(list_5fC_no5fC))
+i[1:(length(list_5fC_no5fC)/2)] <- "TSS with 5fC"
+i[((length(list_5fC_no5fC)/2)+1):length(list_5fC_no5fC)] <- "TSS with no 5fC"
+#saveRDS(i,"../object_resources/figure_4_meta/cluster_5fC_no5fC.LIST.rds")
+
+```
+
+```{r,fig.width=12}
+mycolors <- c("TSS with 5fC"=brewer.pal(n=9,"Set1")[1], "TSS with no 5fC"=brewer.pal(n=9,"Set1")[2])
+m_5fC_no5fC <- signal2Matrix(c(bw_ATAC_nf,bw_ATAC_mono,bw_ATAC_full),w = 2L, regions = list_5fC_no5fC,type = "center")
+m_5fC_no5fC_bg <- rescaleSignalMatrices(m_5fC_no5fC,bg_nf)
+
+#merging replicates in the signal matrices
+sm2 <- list( Nuc.Free =mergeSignalMatrices(m_5fC_no5fC_bg[1:2],aggregation = "mean"), Mononucleosome=mergeSignalMatrices(m_5fC_no5fC_bg[3:4],aggregation = "mean"), Full=mergeSignalMatrices(m_5fC_no5fC_bg[5:6],aggregation = "mean") )
+```
+
+```{r}
+ saveRDS(sm2,"../object_resources/figure_4_meta/matrix_mm.rds")
+m_mm <- readRDS("../object_resources/figure_4_meta/matrix_mm.rds")
+```
+
+
+## generate A 
+
+```{r,fig.width=10.2,fig.height=7}
+mycolors <- c("TSS with 5fC"=brewer.pal(n=9,"Set1")[1], "TSS with no 5fC"=brewer.pal(n=9,"Set1")[2])
+i <- readRDS("../object_resources/figure_1_meta/cluster_5fC_no5fC.LIST.rds")
+p1 <- epiwraps::plotEnrichedHeatmaps((m_mm), row_split = i,scale_title = "Backg.\nnorm.\ndensity", axis_name = c("-2kb","TSS","+2kb"), colors = rocket(100), mean_color = mycolors, mean_scale_side = "left", top_annotation = FALSE,use_raster = TRUE)
+p1
+#saveRDS(p1,"../object_resources/figure_4_meta/p1.rds")
+#p1 <- readRDS("../object_resources/figure_4_meta/p1.rds")
+```
+# B
+## prepare Data
+generate individual matrices for 5fC and no5fC
+```{r, eval =TRUE}
+# with 5fC
+m_5fC <- signal2Matrix(c(bw_ATAC_nf,bw_ATAC_mono,bw_ATAC_full),w = 10L, regions = TSS_2KB_5fC)
+m_5fC_bg <- rescaleSignalMatrices(m_5fC,bg_nf)
+
+# without 5fC
+m_no5fC <- signal2Matrix(c(bw_ATAC_nf,bw_ATAC_mono,bw_ATAC_full),w = 10L, regions = TSS_2KB_no5fC)
+m_no5fC_bg <- rescaleSignalMatrices(m_no5fC,bg_nf)
+```
+
+aggregate signal
+```{r,eval =TRUE}
+# with the matrices we generate dataframes with mean signal per position
+d_5fC <- meltSignals(m_5fC_bg,trim = c(0.02,0.98))
+d_no5fC <- meltSignals(m_no5fC_bg,trim = c(0.02,0.98))
+
+# we merge both dataframes
+dmerge <- dplyr::bind_rows(list("5fC"=d_5fC, "no5fC"=d_no5fC), .id="regions")
+dmerge
+
+#saveRDS(dmerge,"../object_resources/figure_4_meta/dmerge_1.rds")
+
+```
+
+```{r,eval=FALSE}
+# we load the merged dataframe 
+#dmerge <- readRDS("../object_resources/figure_4_meta/dmerge_1.rds")
+```
+
+## generate figure B
+```{r,fig.width=15,fig.height=5}
+# we plot the aggregate signals by region and fragment size distribution
+
+
+p2 <- plot_grid(
+ggplot(dmerge[dmerge$sample == "ATAC_NF_1"|dmerge$sample == "ATAC_NF_2",], aes(position, mean, colour=regions, group = regions, fill = regions)) +
+  geom_vline(xintercept=0, linetype="dashed") +
+  labs(x="TSS", y="mean background norm. density")+
+  stat_summary(geom="ribbon", alpha=0.3, colour = NA ) + stat_summary(fun=mean, geom="line", size = 0.6)+
+  ggtitle("Nuc. Free")+ scale_color_brewer(palette="Set1")+scale_fill_brewer(palette="Set1")+ylim(0,0.1)+theme(text = element_text(size = 10),legend.position = "none"),
+ggplot(dmerge[dmerge$sample == "ATAC_Mono_1"|dmerge$sample == "ATAC_Mono_2",], aes(position, mean, colour=regions, group = regions, fill = regions)) +
+  geom_vline(xintercept=0, linetype="dashed") +
+  stat_summary(geom="ribbon", alpha=0.3, colour = NA ) + stat_summary(fun=mean, geom="line", size = 0.6)+ 
+  labs(x="TSS")+
+  ggtitle("Mononucleosome")+ scale_color_brewer(palette="Set1")+scale_fill_brewer(palette="Set1")+ylim(0,0.1)+theme(text = element_text(size = 10),axis.title.y = element_blank(),legend.position = "none",axis.text.y = element_blank()),
+ggplot(dmerge[dmerge$sample == "ATAC_Full_1"|dmerge$sample == "ATAC_Full_2",], aes(position, mean, colour=regions, group = regions, fill = regions)) +
+  geom_vline(xintercept=0, linetype="dashed") +
+  stat_summary(geom="ribbon", alpha=0.3, colour = NA ) + stat_summary(fun=mean, geom="line", size = 0.6)+
+  xlab("TSS")+
+  ggtitle("Full")+ scale_color_brewer(palette="Set1")+scale_fill_brewer(palette="Set1")+ylim(0,0.1)+theme(text = element_text(size = 10),axis.title.y = element_blank(),axis.text.y = element_blank()),
+ ncol = 3, nrow = 1,rel_widths = c(1.15,1,1.2)
+) 
+p2
+#saveRDS(p2,"../object_resources/figure_4_meta/p2.rds")
+#p2 <- readRDS("../object_resources/figure_4_meta/p2.rds")
+```
+
+# C
+## load and prepare data
+previous data was generated with methylation data from an unpublished source therefore it is now repeated with published work (rando)
+
+
+import unique 5fC sites in proximity to TSS
+```{r}
+unique_5fC_sites_in_TSS <- readRDS("../object_resources/5fC/unique_5fC_sites_in_TSS.rds")
+```
+
+
+import genome fasta file (GRCm38)
+```{r,eval=TRUE}
+genome <- Rsamtools::FaFile("../object_resources/Mus_musculus.GRCm38.dna_sm.primary_assembly.fa")
+genome
+```
+
+loading Rando data methylation levels at promoters and perform liftover (PL)
+```{r,eval =TRUE}
+methylation_mm9 <- readRDS("../object_resources/GSE75323_sperm_prom_methylation.mm9.rds")
+
+methylation_mm9 <- GRanges(methylation_mm9)
+seqlevelsStyle(methylation_mm9)
+
+mm9_mm10_chain <- import.chain("../object_resources//mm9ToMm10.over.chain")
+
+methylation_total <- liftOver(methylation_mm9,chain = mm9_mm10_chain)
+methylation_total <- unlist(methylation_total)
+seqlevelsStyle(methylation_total) <- "Ensembl"
+saveRDS(methylation_total,"../object_resources/methylation_total_grcm38.GR.rds")
+```
+
+load GRCm38 sperm methylation data and check for promoters with methylation score >0.5
+```{r}
+#methylation_total <- readRDS("../object_resources/methylation_rando_grcm38.GR.rds")
+methyl_promoters <- methylation_total[methylation_total$meanMeth>0.5]
+```
+
+load motifs and check select non-redundant TFs
+```{r,eval =TRUE}
+core <- read_meme(file = "../object_resources/HOCOMOCOv11_core_MOUSE_mono_meme_format.meme") # needs to be the right path
+#full <- read_meme(file = "HOCOMOCOv11_full_MOUSE_mono_meme_format.meme") 
+
+
+# original function PL
+summary_core <- universalmotif::summarise_motifs(core)
+core <- setNames(object = core,nm = summary_core$name)
+  
+motifs <- core
+modf <- data.frame(row.names=summary_core$name,
+                     TF=gsub("_MOUSE.H11MO...+","",summary_core$name),
+                     grade=gsub(".+\\.","",summary_core$name),
+                     motif_rank = gsub("[^01]+","",gsub(".*MO.",replacement = "",summary_core$name))) #gsub("[^ro]+", "", str1)
+modf <- modf[order(modf$TF,modf$grade,modf$motif_rank),]
+modf <- modf[!duplicated(modf$TF),]
+modf <- modf[!modf$grade == "D",]
+motifs <- setNames(universalmotif::convert_motifs(motifs[row.names(modf)]), modf$TF)
+```
+
+```{r,eval=TRUE}
+peak_centers <- resize(unique_5fC_sites_in_TSS,fix = "center",width = 200)
+peak_seqs <- memes::get_sequence(dropSeqlevels(peak_centers,"MT",pruning.mode = "coarse"), genome)# dropping MT due to its absence in  reference genome file
+peak_centers <- reduce(promoters(methyl_promoters,  upstream = 1000, downstream = 100))
+peak_seqs_methyl_prom <- memes::get_sequence(dropSeqlevels(peak_centers,"MT",pruning.mode = "coarse"), genome)# dropping MT due to its absence in  reference genome file
+
+ame <- memes::runAme(peak_seqs,control = peak_seqs_methyl_prom , database=convert_motifs(motifs,class = "universalmotif-universalmotif"), meme_path="/common/meme/bin/")
+head(ame)
+
+
+ame$motif <- basename(ame$motif_db)
+#saveRDS(ame,"../object_resources/figure_4_meta/motif_enrichment_5fC_5mC_promoter.rds")
+
+
+```
+
+load sample
+```{r}
+#ame <- readRDS("../object_resources/figure_4_meta/motif_enrichment_5fC_5mC_promoter.rds")
+
+ame <- ame[!ame$fp==0,] #TFs with no false positive are removed since no fold change can be calculated
+```
+
+## generate figure C
+```{r,fig.width=10}
+# results with no false positive were removed
+p3 <- ggplot(ame, aes(log2(((tp/pos))/((fp/neg))), -log10(adj.pvalue))) + 
+  geom_point(alpha=0.7, size =2.5) + geom_text_repel(data=head((ame),10), aes(label=motif),max.overlaps = 20, size = 4,nudge_y = 0.5) +
+  labs(x="log2FE")+ xlim(c(0,6.5))+theme(text = element_text(size = 12))#+ ggtitle("5fC sites in TSS proximity compared to methylated promoter regions")
+p3.2 <- p3 + geom_hline(yintercept=-log10(0.05), linetype="dashed")+ 
+  geom_text(aes(5.5,-log10(0.05),label = "adjst.p-value = 0.05", vjust = -1.0),size = 3.0)
+p3.2
+```
+
+
+
+
+
+## combine all figures as fig.4 
+```{r, fig.width=10, fig.height=7.5}
+#plot_grid(grid.grabExpr(ComplexHeatmap::draw(p1)), nrow=1, rel_widths=c(5,3))
+pp <- plot_grid(plot_grid(grid.grabExpr(ComplexHeatmap::draw(p1)),p3.2,labels = c("A","C"),rel_widths = c(3,2)),p2,labels = c(NA,"B"),nrow = 2,rel_heights = c(3,2))
+pp
+
+
+pp
+pdf("figure_4_meta.pdf", width=10, height=7.5)
+pp # no figure head
+dev.off()
+```
+
+```{r}
+sessionInfo()
+```
+
